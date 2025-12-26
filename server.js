@@ -34,43 +34,114 @@ app.use(session({
 async function initDB() {
     return new Promise((resolve, reject) => {
         db.serialize(() => {
-            db.run(`
-                CREATE TABLE IF NOT EXISTS users (
-                    uid INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT UNIQUE NOT NULL,
-                    password TEXT NOT NULL,
-                    hwid TEXT DEFAULT NULL,
-                    subscription_type TEXT DEFAULT NULL,
-                    subscription_expires TEXT DEFAULT NULL,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            `, (err) => {
+            // Проверяем существует ли таблица users
+            db.get("SELECT name FROM sqlite_master WHERE type='table' AND name='users'", (err, row) => {
                 if (err) {
-                    console.error('❌ Ошибка создания таблицы users:', err);
+                    console.error('❌ Ошибка проверки таблицы:', err);
                     reject(err);
+                    return;
                 }
-            });
-            
-            db.run(`
-                CREATE TABLE IF NOT EXISTS keys (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    key_code TEXT UNIQUE NOT NULL,
-                    subscription_type TEXT NOT NULL,
-                    duration_days INTEGER NOT NULL,
-                    used INTEGER DEFAULT 0,
-                    used_by INTEGER DEFAULT NULL,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    used_at TEXT DEFAULT NULL
-                )
-            `, (err) => {
-                if (err) {
-                    console.error('❌ Ошибка создания таблицы keys:', err);
-                    reject(err);
+                
+                if (row) {
+                    // Таблица существует, проверяем схему
+                    db.all("PRAGMA table_info(users)", (err, columns) => {
+                        if (err) {
+                            console.error('❌ Ошибка проверки схемы:', err);
+                            reject(err);
+                            return;
+                        }
+                        
+                        // Проверяем есть ли колонка hwid и может ли она быть NULL
+                        const hwidColumn = columns.find(col => col.name === 'hwid');
+                        
+                        if (hwidColumn && hwidColumn.notnull === 1) {
+                            console.log('⚠️  Обнаружена старая схема с NOT NULL для hwid');
+                            console.log('🔄 Выполняется миграция базы данных...');
+                            
+                            // Миграция: создаем новую таблицу и копируем данные
+                            db.run('ALTER TABLE users RENAME TO users_old', (err) => {
+                                if (err) {
+                                    console.error('❌ Ошибка переименования таблицы:', err);
+                                    reject(err);
+                                    return;
+                                }
+                                
+                                createTables(resolve, reject, true);
+                            });
+                        } else {
+                            console.log('✅ Схема базы данных актуальна');
+                            resolve();
+                        }
+                    });
                 } else {
-                    console.log('✅ Таблицы SQLite созданы');
-                    resolve();
+                    // Таблицы нет, создаем
+                    createTables(resolve, reject, false);
                 }
             });
+        });
+    });
+}
+
+function createTables(resolve, reject, migrate = false) {
+    db.serialize(() => {
+        db.run(`
+            CREATE TABLE users (
+                uid INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                hwid TEXT,
+                subscription_type TEXT,
+                subscription_expires TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        `, (err) => {
+            if (err) {
+                console.error('❌ Ошибка создания таблицы users:', err);
+                reject(err);
+                return;
+            }
+            console.log('✅ Таблица users создана');
+            
+            if (migrate) {
+                // Копируем данные из старой таблицы
+                db.run(`
+                    INSERT INTO users (uid, username, password, hwid, subscription_type, subscription_expires, created_at)
+                    SELECT uid, username, password, NULL, subscription_type, subscription_expires, created_at
+                    FROM users_old
+                `, (err) => {
+                    if (err) {
+                        console.error('❌ Ошибка миграции данных:', err);
+                    } else {
+                        console.log('✅ Данные пользователей мигрированы');
+                        // Удаляем старую таблицу
+                        db.run('DROP TABLE users_old', (err) => {
+                            if (err) console.error('⚠️  Не удалось удалить старую таблицу:', err);
+                        });
+                    }
+                });
+            }
+        });
+        
+        db.run(`
+            CREATE TABLE IF NOT EXISTS keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                key_code TEXT UNIQUE NOT NULL,
+                subscription_type TEXT NOT NULL,
+                duration_days INTEGER NOT NULL,
+                used INTEGER DEFAULT 0,
+                used_by INTEGER,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                used_at TEXT
+            )
+        `, (err) => {
+            if (err) {
+                console.error('❌ Ошибка создания таблицы keys:', err);
+                reject(err);
+            } else {
+                console.log('✅ Таблица keys создана');
+                console.log('✅ База данных готова!');
+                resolve();
+            }
         });
     });
 }
