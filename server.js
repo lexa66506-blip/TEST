@@ -2,12 +2,31 @@ const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcrypt');
 const session = require('express-session');
+const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Путь к базе данных - используем /opt/render/project/data если доступен (Render Disk)
+// Иначе используем текущую директорию
+const DATA_DIR = process.env.DATA_DIR || '/opt/render/project/data';
+const DB_PATH = path.join(DATA_DIR, 'users.db');
+
+// Создаем директорию для данных если её нет
+if (!fs.existsSync(DATA_DIR)) {
+    try {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+        console.log(`📁 Создана директория для данных: ${DATA_DIR}`);
+    } catch (err) {
+        console.log(`⚠️  Не удалось создать директорию ${DATA_DIR}, используем текущую`);
+    }
+}
+
+console.log(`📂 Путь к базе данных: ${DB_PATH}`);
+
 // SQLite подключение
-const db = new sqlite3.Database('./users.db', (err) => {
+const db = new sqlite3.Database(DB_PATH, (err) => {
     if (err) {
         console.error('❌ Ошибка подключения к SQLite:', err);
     } else {
